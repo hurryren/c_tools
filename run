@@ -1,0 +1,16 @@
+#!/bin/bash
+
+if [ ! -d "build"  ];then
+        mkdir build
+fi
+
+if [ -d "test/$1" ]
+then
+        cc test/*.c test/$1/main.c -I ./include -lm -o build/$1
+        cd build
+        ./$1
+else
+        echo "test does not exists."
+        echo "test list :"
+        echo `ls test`
+fi
