@@ -1,0 +1,5 @@
+1.  写 bar0 更改 ch0 输出，
+2.  写 bar0 给出 fifo 的复位信号以及 flash update 的 start
+    信号，他们公用一个信号，flash 是上升延驱动，该信号拉低后，fifo 复位
+3.  等待 flash 擦除 update 区域后，通过 dma 写向 ch0 发送 8M 更新包
+4.  等待完成信号。
