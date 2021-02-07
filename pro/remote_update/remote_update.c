@@ -109,14 +109,14 @@ int main(int argc, char *argv[]){
     sleep(1);
 
     // 通道选择
-    u_int8_t write_val = 0x01;
+    write_val = 0x01;
     *((u_int8_t *) virt_addr) = write_val;
     printf("write 8-bits value 0x%02x to 0x%08x (0x%p)\n",(unsigned int) write_val,0x4000,virt_addr);
 
     sleep(1);
 
     // update 使能信号
-    u_int8_t write_val = 0xff;
+    write_val = 0xff;
     *((u_int8_t *) virt_addr) = write_val;
     printf("write 8-bits value 0x%02x to 0x%08x (0x%p)\n",(unsigned int) write_val,0x4000,virt_addr);
 
