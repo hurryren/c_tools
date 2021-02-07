@@ -54,14 +54,21 @@ u_int16_t g_status;
 void *watch_status(void *map_base){
     u_int16_t old_status = 0x0000;
     void *virt_addr;
-    virt_addr = map_base + 0x4000;
+    virt_addr = map_base + 0x4008;
     while(1){
         g_status = *((u_int16_t *) virt_addr);
         if (g_status != old_status){
             printf("[sec:%d] status is : %04x\n",g_seconds,g_status);
             old_status = g_status;
+
+            // 如果出错，退出程序
+            if(g_status > 0x00ff){
+                printf("remote update failed !!!");
+                exit(0);
+            }
+
         }
-        sleep(1);
+        sleep(0.5);
         g_seconds++;
     }
     
@@ -131,7 +138,7 @@ int main(int argc, char *argv[]){
         printf("open update file success!");
     }
 
-    int fd_w,rv;
+    int fd_w,rv_w;
     unsigned int txrole = WRITE_CH0;
 
     if((fd_w = open("/dev/tass_sdh",O_RDWR)) < 0){
@@ -139,19 +146,19 @@ int main(int argc, char *argv[]){
     }
     printf("open tass_sdh success\n");
 
-    rv = ioctl(fd_w, txrole, NULL);
-    if(rv){
+    rv_w = ioctl(fd_w, txrole, NULL);
+    if(rv_w){
         FATAL;
     }
-    printf("send update file rv sucess\n");
+    printf("send update file rv_w sucess\n");
 
     int count=0;
     while(count < 8096){
-        rv = read(update_file_fd,msg,1024);
-        if(rv < 0)
+        rv_w = read(update_file_fd,msg,1024);
+        if(rv_w < 0)
             FATAL;
-        rv = write(fd_w,msg,1024);
-        if(rv != 1024)
+        rv_w = write(fd_w,msg,1024);
+        if(rv_w != 1024)
             FATAL;
         
         count++;
