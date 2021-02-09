@@ -19,7 +19,7 @@ int bitree_preorder(const BiTreeNode *node, List *list){
 
 
 int bitree_inorder(const BiTreeNode *node, List *list){
-    f(!bitree_is_eob(node)){
+    if(!bitree_is_eob(node)){
 
 
         if(!bitree_is_eob(bitree_left(node))){
@@ -38,7 +38,7 @@ int bitree_inorder(const BiTreeNode *node, List *list){
 
 
 int bitree_postorder(const BiTreeNode *node, List *list){
-    f(!bitree_is_eob(node)){
+    if(!bitree_is_eob(node)){
 
 
         if(!bitree_is_eob(bitree_left(node))){
