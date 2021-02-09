@@ -56,6 +56,7 @@ void *watch_status(void *map_base){
     void *virt_addr;
     virt_addr = map_base + 0x4008;
     while(1){
+
         g_status = *((u_int16_t *) virt_addr);
         if (g_status != old_status){
             printf("[sec:%d] status is : %04x\n",g_seconds,g_status);
@@ -72,6 +73,28 @@ void *watch_status(void *map_base){
         g_seconds++;
     }
     
+}
+
+void end_trans(unsigned char * msg, int length){
+	int i;
+	int index;
+	unsigned char temp [4];
+	
+	for(i = 0;i<(int)(length / 4);i++){
+		index = i* 4;
+	temp[0] = msg[index+0];
+	temp[1] = msg[index+1];
+	temp[2] = msg[index+2];
+	temp[3] = msg[index+3];
+	
+	msg[index+3] = temp[0];
+	msg[index+2] = temp[1];
+	msg[index+1] = temp[2];
+	msg[index+0] = temp[3];
+
+	}
+
+
 }
 
 
@@ -98,7 +121,7 @@ int main(int argc, char *argv[]){
 
     // 检查 status
     pthread_t tid;
-    pthread_create(&tid,0,(void *)twatch,(void *)(eth_map_base));
+    pthread_create(&tid,0,(void *)watch_status,(void *)(eth_map_base));
 
     // 发送通道选择信号和 remote update 启动信号
     u_int8_t write_val = 0x00;
@@ -131,7 +154,7 @@ int main(int argc, char *argv[]){
 
     // 发送 8MB 更新 bin 文件
     unsigned char msg[4096];
-    int update_file_fd = open("./update.bin",O_RDONLY);
+    int update_file_fd = open("./update32.bin",O_RDONLY);
     if(update_file_fd < 0){
         FATAL;
     }else{
@@ -153,23 +176,28 @@ int main(int argc, char *argv[]){
     printf("send update file rv_w sucess\n");
 
     int count=0;
-    while(count < 8096){
+    while(count < 1024*8){
         rv_w = read(update_file_fd,msg,1024);
         if(rv_w < 0)
             FATAL;
+	end_trans(msg,1024);
         rv_w = write(fd_w,msg,1024);
         if(rv_w != 1024)
             FATAL;
-        
+        if(count % 800 == 0){
+		printf("update file write  %d \n",(int)(count/800));
+	}
         count++;
-        sleep(0.1);
+        sleep(0.005); 
     }
+
+    printf(" update file write finish\n");
 
     // 等待完成
     while(1){
-        if(g_status == 0x003f){
+        if(g_status == 0x007f){
             printf("update finish!!!");
-            break;
+	    return 0;
         }else{
             sleep(1);
         }
