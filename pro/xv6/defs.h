@@ -76,5 +76,25 @@ void            kbdintr(void);
 void            cmostime(struct rtcdata *r);
 int             cpunum(void);
 extern volatile uint* lapic;
-void
+void            lapiceoi(void);
+void            lapicinit(void);
+void            lapicstartap(uchar, uint);
+void            microdelay(int);
+
+// log.c
+void            initlog(int dev);
+void            log_write(struct buf*);
+void            begin_op();
+void            end_op();
+
+// mp.c
+extern int      ismp;
+void            mpinit(void);
+
+// picireq.c
+void            picenable(int);
+void            picinit(void);
+
+// pipe.c
+int             pipealloc(struct file**,struct file**)
 
