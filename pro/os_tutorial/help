@@ -1,0 +1,5 @@
+编译 asm
+    nasm -f bin boot.asm -o orange.bin
+
+运行
+    qemu-system-x86_64 orange.bin -nographic
