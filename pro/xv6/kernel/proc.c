@@ -1,0 +1,432 @@
+#include "types.h"
+#include "param.h"
+#include "memlayout.h"
+#include "riscv.h"
+#include "spinlock.h"
+#include "proc.h"
+#include "defs.h"
+
+struct cpu cpus[NCPU];
+
+struct proc proc[NPROC];
+
+struct proc *initproc;
+
+int nextpid = 1;
+struct spinlock pid_lock;
+
+extern void forkret(void);
+
+static void freeproc(struct proc *p);
+
+extern char trampoline[]; // trampoline.S
+
+/* helps ensure that wakeups of wait()ing
+ * parents are not lost. helps obey the
+ * memory model when using p->parent.
+ * must be acquired before any p->lock
+ */
+struct spinlock wait_lock;
+
+// allocate a page for wach process's kernel stack.
+// map it high in memory, followed by an invalid
+// guard page
+void
+proc_mapstacks(pagetable_t kpgtbl) {
+    struct proc *p;
+
+    for (p = proc; p < &proc[NPROC]; p++) {
+        char *pa = kalloc();
+        if (pa == 0)
+            panic("kalloc");
+        uint64 va = KSTACK((int) (p - proc));
+        kvmmap(kpgtbl, va, (uint64) pa, PGSIZE, PTE_R | PTE_W);
+    }
+}
+
+// initialize the proc table at boot time.
+void
+procinit(void) {
+    struct proc *p;
+
+    initlock(&pid_lock,"nextpid");
+    initlock(&wait_lock,"wait_pid");
+    for(p = proc;p<&proc[NPROC];p++){
+        initlock(&p->lock,"proc");
+        p->kstack = KSTACK((int) (p - proc));
+    }
+}
+
+
+/*
+ * must be called with interrupts disabled,
+ * to prevent race with process being moved
+ * to a different CPU
+ */
+int cpuid(){
+    int id = r_tp();
+    return id;
+}
+
+// return this CPU's cpu struct.
+// Interrupts must be disabled
+struct cpu* mycpu(void){
+    int id = cpuid();
+    struct cpu *c = &cpus[id];
+    return c;
+}
+
+// return the current struct proc *, or zero if none.
+struct proc* myproc(void){
+    push_off();
+    struct cpu *c = mycpu();
+    struct proc *p = c->proc;
+    pop_off();
+    return p;
+}
+
+int allocpid(){
+    int pid;
+    acquire(&pid_lock);
+    pid = nextpid;
+    nextpid = nextpid + 1;
+    release(&pid_lock);
+
+    return pid;
+}
+
+
+/*
+ * look in the process table for an UNUSED proc.
+ * if found, initialize state required to run in the kernel,
+ * and return with p->lock held.
+ * if there are no free procs, or a memory allocation fails, return 0
+ */
+static struct proc* allocproc(void){
+    struct proc *p;
+
+    for(p=proc; p < &proc[NPROC];p++){
+        acquire(&p->lock);
+        if(p->state == UNUSED){
+            goto found;
+        }else{
+            release(&p->lock);
+        }
+    }
+    return 0;
+
+    found:
+    p->pid = allocpid();
+    p->state = USED;
+
+    // allocate a trapframe page
+    if((p->trapframe = (struct trapframe *)kalloc()) == 0){
+        freeproc(p);
+        release(&p->lock);
+        return 0;
+    }
+
+    // an empty user page table
+    p->pagetable = proc_pagetable(p);
+    if(p->pagetable == 0){
+        freeproc(p);
+        release(&p->lock);
+        return 0;
+    }
+
+    // set up new context to start executing at forlert
+    // which returns user space
+    memset(&p->context, 0, sizeof(p->context));
+    p->context.ra = (uint64)forkret;
+    p->context.sp = p->kstack + PGSIZE;
+
+    return p;
+}
+
+// free a proc structure and the data handing from it
+// including user pages
+// p->lock must be held
+static void freeproc(struct proc *p){
+    if(p->trapframe)
+        kfree((void))p->trapframe);
+    p->trapframe = 0;
+    if(p->pagetable)
+        proc_freepagetable(p->pagetable, p->sz);
+    p->pagetable = 0;
+    p->sz = 0;
+    p->pid = 0;
+    p->parent = 0;
+    p->name[0] = 0;
+    p->chan = 0;
+    p->killed = 0;
+    p->xstate = 0;
+    p->state = 0;
+}
+
+// create a user page table for a given process,
+// with no user memory, but with trampoline pages.
+pagetable_t proc_pagetable(struct proc *p){
+    pagetable_t pagetable;
+
+    // an empty page table
+    pagetable = uvmcreate();
+    if(pagetable == 0)
+        return 0;
+
+    /*
+     * map the trampoline code (for system call return)
+     * at the highest user virtual addreee.
+     * only the supervisor uses it, on the way
+     * to/from user space, so not PTE_U
+     */
+    if(mappages(pagetable, TRAMPOLINE, PGSIZE,
+                (uint64)trampoline, PTE_R | PTE_X) < 0){
+        uvmfree(pagetable, 0);
+        return 0;
+    }
+
+    // map the trapframe just below TRAMPOLINE, for trampoline.S
+    if(mappages(pagetable, TRAMPOLINE, PGSIZE,
+                (uint64)(p->trapframe), PTE_R | PTE_W) < 0){
+        uvmunmap(pagetable, TRAMPOLINE, 1, 0);
+        uvmfree(pagetable, 0);
+        return 0;
+    }
+
+    return pagetable;
+}
+
+// free a process's page table, and free the
+// physical memory it refers to
+void proc_freepagetable(pagetable_t pagetable, uint64 sz){
+    uvmunmap(pagetable, TRAMPOLINE, 1, 0);
+    uvmunmap(pagetable, TRAPFRAME, 1, 0);
+    uvmfree(pagetable, sz);
+}
+
+// a user program that calls exec("/init")
+// od -t xC initcode
+uchar initcode[] = {
+        0x17, 0x05, 0x00, 0x00, 0x13, 0x05, 0x45, 0x02,
+        0x97, 0x05, 0x00, 0x00, 0x93, 0x85, 0x35, 0x02,
+        0x93, 0x08, 0x70, 0x00, 0x73, 0x00, 0x00, 0x00,
+        0x93, 0x08, 0x20, 0x00, 0x73, 0x00, 0x00, 0x00,
+        0xef, 0xf0, 0x9f, 0xff, 0x2f, 0x69, 0x6e, 0x69,
+        0x74, 0x00, 0x00, 0x24, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00
+};
+
+
+// set up first user process
+void userinit(void){
+    struct proc *p;
+
+    p = allocproc();
+    initproc = p;
+
+    // allocate one user page and copy init's instructions
+    // and data into it
+    uvminit(p->pagetable, initcode, sizeof(initcode));
+    p->sz = PGSIZE;
+
+    // prepare for the very first "return" from kernel to user.
+    p->trapframe->epc = 0;      // user program counter
+    p->trapframe->sp = PGSIZE;  // user stack pointer
+
+    safestrcpy(p->name, "initcode", sizeof(p->name));
+    p->cwd = namei("/");
+
+    p->state = RUNNABEL;
+
+    release(&p->lock);
+}
+
+// grow or shrink user memory by n bytes.
+// return 0 on success, -1 on failure.
+int growproc(int n){
+    uint sz;
+    struct proc *p = myproc();
+
+    sz = p->sz;
+    if(n > 0){
+        if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0){
+            return -1;
+        }
+    }else if(n<0){
+        sz = uvmdealloc(p->pagetable, sz, sz+n);
+    }
+    p->sz = sz;
+    return 0;
+}
+
+// create a new process, copying the parent.
+// sets up child kernel stack to return as if from fork() system call.
+int fork(void){
+    int i, pid;
+    struct proc *np;
+    struct proc *p = myproc();
+
+    // allocate process
+    if((np == allocproc()) == 0){
+        return -1;
+    }
+
+    // copy user memory from parent to child
+    if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
+        freeproc(np);
+        release(&np->lock);
+        return -1;
+    }
+    np->sz = p->sz;
+
+    // copy saved user registers.
+    *(np->trapframe) = *(p->trapframe);
+
+    // cause fork ot return 0 in the child
+    np->trapframe->a0 = 0;
+
+    // increment reference counts on open file descriptors
+    for(i = 0; i<NOFILE;i++)
+        if(p->ofile[i])
+            np->ofile[i] = filedup(p->ofile[i]);
+        np->cwd = idup(p->cwd);
+
+    safestrcpy(np->name, p->name, sizeof(p->name));
+
+    pid = np->pid;
+
+    release(&np->lock);
+
+    acquire(&wait_lock);
+    np->parent = p;
+    release(&wait_lock);
+
+    acquire(&np->lock);
+    np->state = RUNNABEL;
+    release(&np->lock);
+
+    return pid;
+}
+
+// pass ['s abandoned children to inti
+// caller must hold wait_lock
+void reparent(struct proc *p){
+    struct proc *pp;
+
+    for(pp = proc; pp < &proc[NPROC]; pp++){
+        if(pp->parent == p){
+            pp->parent = initproc;
+            wakeup(initproc);
+        }
+    }
+}
+
+// exit the current process. does not return
+// an exited process ewmains in the zombie state
+// until its parent calls wait()
+void exit(int status){
+    struct proc *p = myproc();
+
+    if(p==initproc)
+        panic("init exiting");
+
+    // close all open files
+    for(int fd = 0;fd < NOFILE; fd++){
+        if(p->ofile[fd]){
+            struct file *f = p->ofile[fd];
+            fileclose(f);
+            p->ofile[fd] = 0;
+        }
+    }
+
+    begin_op();
+    iput(p->cwd);
+    end_op();
+    p->cwd = 0;
+
+    acquire(&wait_lock);
+
+    // give any children to init
+    reparent(p);
+
+    // parent might be sleeping in wait()
+    wakeup(p->parent);
+
+    acquire(&p->lock);
+
+    p->xstate = status;
+    p->state = ZOMBLE;
+
+    release(&wait_lock);
+
+    // jump into the scheduler, never to return
+    sched();
+    panic("zombie exit");
+}
+
+// wait for a child process to exit and return its pid
+// return -1 if this process has no children
+int wait(uint64 addr){
+    struct proc, *np;
+    int havekids, pid;
+    struct proc *p = myproc();
+
+    acquire(&wait_lock);
+
+    for(;;){
+        // scan through table looking for exited children
+        havekids = 0;
+        for(np = proc; np < &proc[NPROC];np++){
+            if(np->parent == p){
+                // make sure the child isn't still in exit() or switch().
+                acquire(&np->lock);
+
+                havekids = 1;
+                if(np->state == ZOMBLE){
+                    // found one
+                    pid = np->pid;
+                    if(addr != 0 && copyout(p->pagetable, addr, (char *)&np->xstate,sizeof(np->xstate)) < 0){
+                        release(&np->lock);
+                        release(&wait_lock);
+                        return -1;
+                    }
+                    freeproc(np);
+                    release(&np->lock);
+                    release(&wait_lock);
+                    return pid;
+                }
+                release(&np->lock);
+            }
+        }
+
+        // no point waiting if we don't have any children
+        if(!havekids || p->killed){
+            release(&wait_lock);
+            return -1;
+        }
+
+        // wait for a child to exit
+        sleep(p, &wait_lock); // doc: wait-sleep
+    }
+}
+
+/*
+ * per-CPU process scheduler
+ * each cpu calls scheduler() after setting itself up
+ * scheduler never returns. it loops doing:
+ * 
+ */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
