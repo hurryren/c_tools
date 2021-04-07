@@ -414,11 +414,220 @@ int wait(uint64 addr){
  * per-CPU process scheduler
  * each cpu calls scheduler() after setting itself up
  * scheduler never returns. it loops doing:
- * 
+ *  - chose a process to run
+ *  - swtch to start running that process
+ *  - eventually that process transfers control
+ *  - via swtch back to the scheduler
  */
 
+void scheduler(void){
+    struct proc *p;
+    struct cput *c = mycpu();
+
+    c->proc = 0;
+    for(;;){
+        // avoid deadlock by ensuring that devices can interrupt
+        intr_on();
+
+        for(p = proc; p<&proc[NPROC]; p++){
+            acquire(&p->lock);
+            if(p->state == RUNNABEL){
+                // switch to chosen process. It is the process's job
+                // to release tis lock and then reacquire it
+                // before jumping back to us
+                p->state = RUNNING;
+                c->proc = p;
+                swtch(&c->context,  &p->context);
+
+                // process is done running for now
+                // it should have changed its p->state before coming back
+                c->proc= p;
+            }
+            release(&p->lock);
+        }
+    }
+}
+
+/*
+ * switch to scheduler. must hold only p->lock
+ * and have changed proc->state. saves and restores
+ * intena bacause intena is a property of this
+ * kernel thread, not this cpu. it should
+ * be proc->intena and proc->noff, but that would
+ * break in the few places where a lock is held but
+ * there's no process
+ */
+void sched(void){
+    int intena;
+    struct proc *p = myproc();
+
+    if(!holding(&p->lock))
+        panic("sched p->lock");
+    if(mycpu()->noff != 1)
+        panic("sched locks");
+    if(p->state == RUNNING)
+        panic("sched running");
+    if(intr_get())
+        panic("sched interruptible");
+
+    intena = mycpu()->intena;
+    swtch(&p->context,&mycpu()->context);
+    mycpu()->intena = intena;
+}
 
 
+// give up the cpu for one scheduling round
+void yield(void){
+    struct proc *p = myproc();
+    acquire(&p->lock);
+    p->state = RUNNABEL;
+    sched();
+    release(&p->lock);
+}
+
+// a fork child's very first scheduling by scheduler()
+// will swtch to forkret
+void forkret(void){
+    static int first = 1;
+
+    // still holding p->lock from scheduler
+    release(&myproc()->lock);
+
+    if(first){
+        /*
+         * file system initialization must be run  in th context of a
+         * regular process(e.g., because it calls sleep), and thus cannot
+         * be run from main()
+         */
+        first = 0;
+        fsinit(ROOTDEV);
+    }
+
+    usertrapret();
+}
+
+// atomically release lock and sleep on chan.
+// reacquires lock when awakened
+void sleep(void *chan, struct spinlock *lk){
+    struct proc *p = myproc();
+
+    /*
+     * must acquire p->lock in order to
+     * change p->state and then call sched.
+     * once we hold p->lock, we can be
+     * guaranteed that we won't miss any wakeup
+     * (wakeup locks p->lock),
+     * so it's okay to relwase lk.
+     */
+    acquire(&p->lock);
+    release(lk);
+
+    // go to sleep
+    p->chan = chan;
+    p->state = SLEEPING;
+
+    sched();
+
+    // Tidy up
+    p->chan = 0;
+
+    // reacquire original lock
+    release(&p->lock);
+    acquire(lk);
+}
+
+//wake up all process sleeping on chan
+// must be called without any p->lock
+void wakeup(void *chan){
+    struct proc *p;
+    for(p= proc; p<&proc[NPROC];p++){
+        if(p != myproc()){
+            acquire(&p->lock);
+            if(p->state == SLEEPING && p->chan){
+                p->state = RUNNABEL;
+            }
+            release(&p->lock);
+        }
+    }
+}
+
+// kill the process with given pid.
+// the victim won't exit until ti tries to return
+// to user space (see usertrap() in trap.c)
+int kill(int pid){
+    struct proc *p;
+
+    for(p = proc;p<&proc[NPROC];p++){
+        acquire(&p->lock);
+        if(p->pid == pid){
+            p->killed = 1;
+            if(p->state == SLEEPING){
+                // wake process from sleep()
+                p->state = RUNNABEL;
+            }
+            release(&p->lock);
+            return 0;
+        }
+        release(&p->lock);
+    }
+    return -1;
+}
+
+// copy to either a user address, or kernel address,
+// depending on usr_dst.
+// returns 0 on success, -1 on error
+int either_copyout(int user_dst, uint64 dst, void *src, uint64 len){
+    struct proc *p = myproc();
+    if(user_dst){
+        return copyout(p->pagetable,dst, src, len);
+    }else{
+        memmove((char*)dst, src, len);
+        return 0;
+    }
+}
+
+// copy from either a user address, or kernel address,
+// depending on usr_src.
+// returns 0 on success, -1 on error
+int either_copyin(void *dst, int user_src, uint64 src, uint64 len){
+    struct proc *p = myproc();
+    if(user_src){
+        return copyin(p->pagetable, dst, src,len);
+    }else{
+        memmove(dst, (char*)src, len);
+        return 0;
+    }
+}
+
+/*
+ * print a process listing to console. for debugging.
+ * runs when user types ^P on console.
+ * No lock to avoid wedging a stuck machine further.
+ */
+void procdump(void){
+    static char *statesp[] = {
+            [UNUSED]    "unused",
+            [SLEEPING]  "sleep",
+            [RUNNABLE]  "runble",
+            [RUNNING]   "run",
+            [ZOMBIE]    "zombie"
+    };
+    struct proc *p;
+    char *state;
+
+    printf("\n");
+    for(p=proc;p<&proc[NPROC];p++){
+        if(p->state == UNUSED)
+            continue;
+        if(p->state >= 0 && p->state < NELEM(states) && statesp[p->state])
+            state = states[p->state];
+        else
+            state = "???";
+        printf("%d %s %s",p->pid,state,p->name);
+        printf("\n");
+
+    }
+}
 
 
 
