@@ -10,7 +10,7 @@ static void int2char(const unsigned int src, unsigned char *dst){
     if(NULL == dst)
         return;
     for(int i=0;i<4;i++){
-        dst[i] = src&0xff;
+        dst[i] = temp&0xff;
         temp = temp>>8;
     }
 }
