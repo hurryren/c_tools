@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <sys/types.h>
 
+#define cpu_to_be32(v) (((v)>>24) | (((v)>>8)&0xff00) | (((v)<<8)&0xff0000)|((v)<<24))
+
 void print_buf(unsigned char *buf, int len)
 {
     int i;
