@@ -4,6 +4,17 @@
 
 #define cpu_to_be32(v) (((v)>>24) | (((v)>>8)&0xff00) | (((v)<<8)&0xff0000)|((v)<<24))
 
+
+static void int2char(const unsigned int src, unsigned char *dst){
+    unsigned  int temp = src;
+    if(NULL == dst)
+        return;
+    for(int i=0;i<4;i++){
+        dst[i] = src&0xff;
+        temp = temp>>8;
+    }
+}
+
 void print_buf(unsigned char *buf, int len)
 {
     int i;
