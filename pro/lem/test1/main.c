@@ -65,8 +65,10 @@ int main(){
 
     memcpy(tx,send_data,64);
 
+    char c[10];
     while(1){
-        switch (getchar())
+        fgets(c,8,stdin);
+        switch (c[0])
         {
         case 'u': // udp
             tx[23] = 0x11;
