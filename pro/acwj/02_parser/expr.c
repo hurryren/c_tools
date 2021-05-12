@@ -65,6 +65,6 @@ struct ASTnode *binexpr(void){
 
     // Now build a tree with both sub-trees
     n = mkastnode(nodetype,left,right,0);
-    return 0;
+    return n;
 
 }

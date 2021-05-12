@@ -73,10 +73,12 @@ int scan(struct token *t) {
   // Skip whitespace
   c = skip();
 
+
   // Determine the token based on
   // the input character
   switch (c) {
   case EOF:
+    t->token =T_EOF;
     return (0);
   case '+':
     t->token = T_PLUS;
