@@ -1,0 +1,5 @@
+gcc -o signal_send signal_send.c util_tools.c uart-comm.c ipc.c log.c -lrt
+gcc -o signal_recv signal_recv.c util_tools.c uart-comm.c ipc.c log.c -lrt
+gcc -o test_send test_sendmq.c ipc.c util_tools.c -lrt 
+gcc -o test_recv test_recvmq.c ipc.c util_tools.c -lrt
+
