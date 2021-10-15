@@ -14,6 +14,7 @@
 
 #define WRITE_CH0   0xc001
 #define CTRL_USER   0xc020
+#define REMOTE_BASE_ADDR  0x6000
 
 #define FATAL do {fprintf(stderr, "error at line %d, file %s (%d) [%s]\n", __LINE__, __FILE__, errno, strerror(errno)); exit(1);}while(0)
 
@@ -50,11 +51,11 @@ void *twatch(void *param){
 }
 
 // 读 status
-u_int16_t g_status;
+u_int16_t g_status=0;
 void *watch_status(void *map_base){
     u_int16_t old_status = 0x0000;
     void *virt_addr;
-    virt_addr = map_base + 0x4008;
+    virt_addr = map_base + REMOTE_BASE_ADDR + 0x0008;
     while(1){
 
         g_status = *((u_int16_t *) virt_addr);
@@ -125,23 +126,25 @@ int main(int argc, char *argv[]){
 
     // 发送通道选择信号和 remote update 启动信号
     u_int8_t write_val = 0x00;
-    virt_addr = eth_map_base + 0x4000;
+    virt_addr = eth_map_base + REMOTE_BASE_ADDR;
     *((u_int8_t *) virt_addr) = write_val;
-    printf("write 8-bits value 0x%02x to 0x%08x (0x%p)\n",(unsigned int) write_val,0x4000,virt_addr);
+    printf("write 8-bits value 0x%02x to 0x%08x (0x%p)\n",(unsigned int) write_val,0x6000,virt_addr);
     
     sleep(1);
 
     // 通道选择
     write_val = 0x01;
     *((u_int8_t *) virt_addr) = write_val;
-    printf("write 8-bits value 0x%02x to 0x%08x (0x%p)\n",(unsigned int) write_val,0x4000,virt_addr);
+    printf("write 8-bits value 0x%02x to 0x%08x (0x%p)\n",(unsigned int) write_val,0x6000,virt_addr);
 
     sleep(1);
 
     // update 使能信号
     write_val = 0xff;
     *((u_int8_t *) virt_addr) = write_val;
-    printf("write 8-bits value 0x%02x to 0x%08x (0x%p)\n",(unsigned int) write_val,0x4000,virt_addr);
+    printf("write 8-bits value 0x%02x to 0x%08x (0x%p)\n",(unsigned int) write_val,0x6000,virt_addr);
+    
+    //sleep(100);
 
     // 等待 status 显示 erase update area finish
     while(1){
@@ -195,8 +198,8 @@ int main(int argc, char *argv[]){
 
     // 等待完成
     while(1){
-        if(g_status == 0x007f){
-            printf("update finish!!!");
+        if(g_status == 0x007f || g_status == 0x0000){
+            printf("update finish!!!\n");
 	    return 0;
         }else{
             sleep(1);

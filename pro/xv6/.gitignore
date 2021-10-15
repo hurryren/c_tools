@@ -1,0 +1,9 @@
+# orange rules
+.idea/
+cmake-build-debug/
+CMakeLists.txt
+.vscode/
+build/
+
+book-riscv-rev1.pdf
+
